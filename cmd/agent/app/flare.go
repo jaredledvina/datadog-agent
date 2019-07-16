@@ -37,13 +37,20 @@ var flareCmd = &cobra.Command{
 	Short: "Collect a flare and send it to Datadog",
 	Long:  ``,
 	RunE: func(cmd *cobra.Command, args []string) error {
-		err := common.SetupConfig(confFilePath)
-		if err != nil {
-			return err
-		}
 
 		if flagNoColor {
 			color.NoColor = true
+		}
+
+		err := common.SetupConfig(confFilePath)
+		if err != nil {
+			return fmt.Errorf("unable to set up global agent configuration: %v", err)
+		}
+
+		err = config.SetupLogger(loggerName, config.GetEnv("DD_LOG_LEVEL", "off"), "", "", false, true, false)
+		if err != nil {
+			fmt.Printf("Cannot setup logger, exiting: %v\n", err)
+			return err
 		}
 
 		caseID := ""
@@ -51,8 +58,6 @@ var flareCmd = &cobra.Command{
 			caseID = args[0]
 		}
 
-		// The flare command should not log anything, all errors should be reported directly to the console without the log format
-		config.SetupLogger(loggerName, "off", "", "", false, true, false)
 		if customerEmail == "" {
 			var err error
 			customerEmail, err = input.AskForEmail()
