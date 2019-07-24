@@ -7,6 +7,7 @@ stages:
   - check_deploy
   - testkitchen_deploy
   - testkitchen_testing
+  - pkg_metrics
   - image_build
   - image_deploy
   - deploy
@@ -843,6 +844,55 @@ kitchen_debian:
     when: always
     paths:
       - $CI_PROJECT_DIR/kitchen_logs
+
+#
+# pkg_metrics: send metrics about packages
+#
+
+send_pkg_size:
+  stage: pkg_metrics
+  #<<: *run_when_triggered
+  image: 486234852809.dkr.ecr.us-east-1.amazonaws.com/ci/datadog-agent-builders/deploy:latest
+  before_script:
+    - ls $OMNIBUS_PACKAGE_DIR
+  tags: [ "runner:main", "size:large" ]
+  script:
+    - mkdir -p /tmp/deb/agent /tmp/deb/dogstatsd /tmp/deb/puppy
+    - mkdir -p /tmp/rmp/agent /tmp/rpm/dogstatsd
+    - mkdir -p /tmp/suse/agent /tmp/suse/dogstatsd
+    # debian
+    - ar -xv "$OMNIBUS_PACKAGE_DIR/datadog-agent_*_amd64.deb" /tmp/deb/agent
+    - ar -xv "$OMNIBUS_PACKAGE_DIR/datadog-dogstatsd_*_amd64.deb" /tmp/deb/dogstatsd
+    - ar -xv "$OMNIBUS_PACKAGE_DIR/datadog-puppy_*_amd64.deb" /tmp/deb/puppy
+    - DEB_AGENT_SIZE=$(du -s /tmp/deb/agent)
+    - DEB_DOGSTATSD_SIZE=$(du -s /tmp/deb/dogstatsd)
+    - DEB_PUPPY_SIZE=$(du -s /tmp/deb/puppy)
+    # centos
+    - cd /tmp/rpm/agent && rpm2cpio "$OMNIBUS_PACKAGE_DIR/datadog-agent-*.x86_64.rpm" | cpio -idmv
+    - cd /tmp/rpm/dogstatsd && rpm2cpio "$OMNIBUS_PACKAGE_DIR/datadog-dogstatsd-*.x86_64.rpm" | cpio -idmv
+    - RPM_AGENT_SIZE=$(du -s /tmp/rpm/agent)
+    - RPM_DOGSTATSD_SIZE=$(du -s /tmp/rpm/dogstatsd)
+    # suse
+    - cd /tmp/rpm/agent && rpm2cpio "$OMNIBUS_PACKAGE_DIR_SUSE/datadog-agent-*.x86_64.rpm" | cpio -idmv
+    - cd /tmp/rpm/dogstatsd && rpm2cpio "$OMNIBUS_PACKAGE_DIR/datadog-dogstatsd-*.x86_64.rpm" | cpio -idmv
+    - SUSE_AGENT_SIZE=$(du -s /tmp/suse/agent)
+    - SUSE_DOGSTATSD_SIZE=$(du -s /tmp/suse/dogstatsd)
+
+    # sending metrics
+    - currenttime=$(date +%s)
+    - DD_API_KEY=$(aws ssm get-parameter --region us-east-1 --name ci.datadog-agent.datadog_api_key --with-decryption --query "Parameter.Value" --out text)
+    - curl  -X POST -H "Content-type: application/json"
+      -d "{\"series\":[
+            {\"metric\":\"datadog.agent.package.size\",\"points\":[[${currenttime}, ${DEB_AGENT_SIZE}]], \"tags\":[\"os:debian\", \"package:agent\"]},
+            {\"metric\":\"datadog.agent.package.size\",\"points\":[[${currenttime}, ${DEB_DOGSTATSD_SIZE}]], \"tags\":[\"os:debian\", \"package:dogstatsd\"]},
+            {\"metric\":\"datadog.agent.package.size\",\"points\":[[${currenttime}, ${DEB_PUPPY_SIZE}]], \"tags\":[\"os:debian\", \"package:puppy\"]},
+            {\"metric\":\"datadog.agent.package.size\",\"points\":[[${currenttime}, ${RPM_AGENT_SIZE}]], \"tags\":[\"os:centos\", \"package:agent\"]},
+            {\"metric\":\"datadog.agent.package.size\",\"points\":[[${currenttime}, ${RPM_DOGSTATSD_SIZE}]], \"tags\":[\"os:centos\", \"package:dogstatsd\"]},
+            {\"metric\":\"datadog.agent.package.size\",\"points\":[[${currenttime}, ${SUSE_AGENT_SIZE}]], \"tags\":[\"os:suse\", \"package:agent\"]},
+            {\"metric\":\"datadog.agent.package.size\",\"points\":[[${currenttime}, ${SUSE_DOGSTATSD_SIZE}]], \"tags\":[\"os:suse\", \"package:dogstatsd\"]},
+          ]}"
+      "https://api.datadoghq.com/api/v1/series?api_key=${DD_API_KEY}"
+
 
 # run dd-agent-testing
 testkitchen_cleanup_s3:
